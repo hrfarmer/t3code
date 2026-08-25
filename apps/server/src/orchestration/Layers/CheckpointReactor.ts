@@ -39,6 +39,9 @@ import { isGitRepository } from "../../git/Utils.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 
+const isRemoteOnlyProvider = (provider: string | null | undefined): boolean =>
+  provider === "cursorCloud";
+
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 type ReactorInput =
@@ -364,6 +367,10 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      if (isRemoteOnlyProvider(event.provider) || isRemoteOnlyProvider(thread.session?.providerName)) {
+        return;
+      }
+
       // When a primary turn is active, only that turn may produce completion checkpoints.
       if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
         return;
@@ -443,6 +450,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (isRemoteOnlyProvider(thread.session?.providerName)) {
+      return;
+    }
+
     // If a real checkpoint already exists for this turn, skip.
     if (
       thread.checkpoints.some(
@@ -488,6 +499,10 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadDetail(event.threadId);
       if (!thread) {
+        return;
+      }
+
+      if (isRemoteOnlyProvider(event.provider) || isRemoteOnlyProvider(thread.session?.providerName)) {
         return;
       }
 
@@ -650,6 +665,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (isRemoteOnlyProvider(thread.session?.providerName)) {
+      return;
+    }
+
     const projects = yield* resolveThreadProjects(thread.projectId);
     const checkpointCwd = yield* resolveCheckpointCwd({
       threadId,
@@ -698,6 +717,17 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         detail: "Thread was not found in read model.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    if (isRemoteOnlyProvider(thread.session?.providerName)) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Cursor Cloud work lives on the pull request. Revert there, not from a local checkpoint.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -863,6 +893,10 @@ const make = Effect.gen(function* () {
   const processRuntimeEvent = Effect.fn("processRuntimeEvent")(function* (
     event: ProviderRuntimeEvent,
   ) {
+    if (isRemoteOnlyProvider(event.provider)) {
+      return;
+    }
+
     if (event.type === "turn.started") {
       yield* ensurePreTurnBaselineFromTurnStart(event);
       return;

@@ -1048,4 +1048,76 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("stores Cursor Cloud API keys outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const instanceId = ProviderInstanceId.make("cursorCloud");
+
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          cursorCloud: {
+            enabled: true,
+            apiKey: "crsr_legacy_secret",
+          },
+        },
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("cursorCloud"),
+            enabled: true,
+            config: {
+              enabled: true,
+              apiKey: "crsr_instance_secret",
+              autoCreatePR: true,
+            },
+          },
+        },
+      });
+
+      assert.equal(next.providers.cursorCloud.apiKey, "crsr_legacy_secret");
+      assert.equal(
+        (next.providerInstances[instanceId]?.config as { apiKey?: string } | undefined)?.apiKey,
+        "crsr_instance_secret",
+      );
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "crsr_legacy_secret");
+      assert.notInclude(raw, "crsr_instance_secret");
+
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(next);
+      assert.equal(redacted.providers.cursorCloud.apiKey, "");
+      assert.equal(
+        (redacted.providerInstances[instanceId]?.config as { apiKey?: string } | undefined)?.apiKey,
+        "",
+      );
+
+      const roundTripped = yield* serverSettings.updateSettings({
+        providers: {
+          cursorCloud: {
+            apiKey: "",
+          },
+        },
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("cursorCloud"),
+            enabled: true,
+            config: {
+              enabled: true,
+              apiKey: "",
+              autoCreatePR: true,
+            },
+          },
+        },
+      });
+
+      assert.equal(roundTripped.providers.cursorCloud.apiKey, "crsr_legacy_secret");
+      assert.equal(
+        (roundTripped.providerInstances[instanceId]?.config as { apiKey?: string } | undefined)
+          ?.apiKey,
+        "crsr_instance_secret",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });
