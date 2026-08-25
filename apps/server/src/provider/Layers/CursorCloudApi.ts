@@ -399,6 +399,9 @@ export const makeCursorCloudApi = (input: {
         }),
         Stream.unwrap,
         Stream.decodeText,
+        // Flush a trailing blank line so the last SSE event emits when the
+        // server closes the body without a terminating \n\n.
+        Stream.concat(Stream.succeed("\n\n")),
         Stream.pipeThroughChannel(Sse.decode()),
         Stream.map((sseEvent) => {
           const parsed =

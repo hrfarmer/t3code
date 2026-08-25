@@ -27,8 +27,12 @@ it.layer(NodeServices.layer)("resolveCursorCloudGitTarget", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-cloud-git-ok-" });
-      const init = yield* runGit(cwd, ["init"]);
+      const init = yield* runGit(cwd, ["init", "-b", "main"]);
       assert.equal(init.code, 0);
+      yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
+      yield* runGit(cwd, ["config", "user.name", "Test"]);
+      const commit = yield* runGit(cwd, ["commit", "--allow-empty", "-m", "init"]);
+      assert.equal(commit.code, 0, commit.stderr);
       const remote = yield* runGit(cwd, [
         "remote",
         "add",
@@ -36,7 +40,8 @@ it.layer(NodeServices.layer)("resolveCursorCloudGitTarget", (it) => {
         "git@github.com:org/repo.git",
       ]);
       assert.equal(remote.code, 0, remote.stderr);
-      yield* runGit(cwd, ["checkout", "-b", "feature"]);
+      const branch = yield* runGit(cwd, ["checkout", "-b", "feature"]);
+      assert.equal(branch.code, 0, branch.stderr);
       const target = yield* resolveCursorCloudGitTarget(cwd);
       assert.equal(target.repoUrl, "https://github.com/org/repo");
       assert.equal(target.startingRef, "feature");

@@ -133,6 +133,7 @@ it.effect("parses the run SSE stream and sends Last-Event-ID on resume", () =>
             "event: result",
             'data: {"status":"FINISHED","text":"Done","git":{"branches":[{"prUrl":"https://github.com/org/repo/pull/1"}]}}',
             "",
+            "",
           ].join("\n"),
         ),
       );

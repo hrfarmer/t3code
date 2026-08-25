@@ -60,6 +60,7 @@ const makeMockApi = () => {
     lastCreatePrompt: "",
     lastFollowUpPrompt: "",
     createRunError: null as CursorCloudApiError | null,
+    hangRuns: new Set<string>(),
     streamEventsByRun: new Map<string, ReadonlyArray<CursorCloudStreamEvent>>(),
     getRunById: new Map<string, CursorCloudRun>(),
   };
@@ -97,7 +98,9 @@ const makeMockApi = () => {
     createRun: (_agentId, input) =>
       Effect.gen(function* () {
         if (state.createRunError) {
-          return yield* state.createRunError;
+          const error = state.createRunError;
+          state.createRunError = null;
+          return yield* error;
         }
         state.createRunCalls += 1;
         state.lastFollowUpPrompt = input.prompt.text;
@@ -112,6 +115,10 @@ const makeMockApi = () => {
     getRun: (_agentId, runId) =>
       Effect.succeed(state.getRunById.get(runId) ?? finishedRun(runId)),
     streamRun: (_agentId, runId) => {
+      if (state.hangRuns.has(runId)) {
+        const prefix = state.streamEventsByRun.get(runId) ?? [];
+        return Stream.fromIterable(prefix.slice(0, 1)).pipe(Stream.concat(Stream.never));
+      }
       const events = state.streamEventsByRun.get(runId);
       if (events) {
         return Stream.fromIterable(events);
@@ -315,6 +322,86 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
             event.type === "content.delta" && event.payload.delta.includes("Recovered from GET run."),
         ),
       );
+    }),
+  );
+
+  it.effect("waits out 409 agent_busy then retries the follow-up run", () =>
+    Effect.gen(function* () {
+      const { api, state } = makeMockApi();
+      state.createRunError = new CursorCloudApiError({
+        method: "POST /v1/agents/{id}/runs",
+        status: 409,
+        code: "agent_busy",
+        detail: "Agent is already running a turn.",
+      });
+      state.streamEventsByRun.set("run-busy", [
+        { event: "result", data: { status: "FINISHED" } },
+      ]);
+      const adapter = yield* makeCursorCloudAdapter(settings, {
+        instanceId: ProviderInstanceId.make("cursorCloud"),
+        api,
+        resolveGitTarget: () =>
+          Effect.succeed({ repoUrl: "https://github.com/org/repo", startingRef: "main" }),
+      });
+      const threadId = asThreadId("thread-cloud-busy");
+      const collected = yield* collectUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("cursorCloud"),
+        threadId,
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        resumeCursor: { schemaVersion: 1, agentId: "bc-persisted" },
+      });
+      yield* adapter.sendTurn({ threadId, input: "Retry after busy" });
+      yield* collected.wait;
+      assert.equal(state.createAgentCalls, 0);
+      assert.equal(state.createRunCalls, 1);
+      assert.equal(state.lastFollowUpPrompt, "Retry after busy");
+    }),
+  );
+
+  it.effect("cancels the in-flight cloud run on interrupt", () =>
+    Effect.gen(function* () {
+      const { api, state } = makeMockApi();
+      state.hangRuns.add("run-1");
+      const adapter = yield* makeCursorCloudAdapter(settings, {
+        instanceId: ProviderInstanceId.make("cursorCloud"),
+        api,
+        resolveGitTarget: () =>
+          Effect.succeed({ repoUrl: "https://github.com/org/repo", startingRef: "main" }),
+      });
+      const threadId = asThreadId("thread-cloud-cancel");
+      const events = yield* Ref.make<Array<{ readonly type: string }>>([]);
+      const sawDelta = yield* Deferred.make<void>();
+      const sawAbort = yield* Deferred.make<void>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Ref.update(events, (current) => [...current, event]).pipe(
+            Effect.zipRight(
+              event.type === "content.delta"
+                ? Deferred.succeed(sawDelta, undefined).pipe(Effect.ignore)
+                : event.type === "turn.aborted"
+                  ? Deferred.succeed(sawAbort, undefined).pipe(Effect.ignore)
+                  : Effect.void,
+            ),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("cursorCloud"),
+        threadId,
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+      });
+      yield* adapter.sendTurn({ threadId, input: "Long running" });
+      yield* Deferred.await(sawDelta);
+      yield* adapter.interruptTurn(threadId);
+      yield* Deferred.await(sawAbort);
+      assert.deepEqual(state.cancelCalls, ["bc-1:run-1"]);
     }),
   );
 });

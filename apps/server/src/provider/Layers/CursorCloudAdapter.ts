@@ -601,9 +601,14 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
       }
       const resumeCursor = cursorCloudResumeCursor(agentId);
       context.session = { ...context.session, resumeCursor };
-      context.streamFiber = yield* consumeRunStream(context, input.threadId, turnId, agentId, runId).pipe(
-        Effect.fork,
-      );
+      // Detached so the SSE consumer outlives sendTurn; interrupted on stop/cancel.
+      context.streamFiber = yield* consumeRunStream(
+        context,
+        input.threadId,
+        turnId,
+        agentId,
+        runId,
+      ).pipe(Effect.forkDetach({ startImmediately: true }));
       return { threadId: input.threadId, turnId, resumeCursor };
     });
 
