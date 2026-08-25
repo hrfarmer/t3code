@@ -107,6 +107,8 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
   const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runtimeContext = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(runtimeContext);
   const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CursorCloudSessionContext>();
   const api =
@@ -610,15 +612,10 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
       }
       const resumeCursor = cursorCloudResumeCursor(agentId);
       context.session = { ...context.session, resumeCursor };
-      // Detached so the SSE consumer outlives sendTurn; interrupted on stop/cancel.
-      // Do not startImmediately: a sync stream can deadlock the sendTurn fiber.
-      context.streamFiber = yield* consumeRunStream(
-        context,
-        input.threadId,
-        turnId,
-        agentId,
-        runId,
-      ).pipe(Effect.forkDetach);
+      // Run on the adapter runtime so the SSE consumer outlives sendTurn.
+      context.streamFiber = runFork(
+        consumeRunStream(context, input.threadId, turnId, agentId, runId),
+      );
       return { threadId: input.threadId, turnId, resumeCursor };
     });
 
