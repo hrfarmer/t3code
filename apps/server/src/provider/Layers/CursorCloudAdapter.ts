@@ -612,7 +612,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
       }
       const resumeCursor = cursorCloudResumeCursor(agentId);
       context.session = { ...context.session, resumeCursor };
-      // Run on the adapter runtime so the SSE consumer outlives sendTurn.
+      // Adapter runtime, not sendTurn: that fiber finishes before SSE ends.
       context.streamFiber = runFork(
         consumeRunStream(context, input.threadId, turnId, agentId, runId),
       );

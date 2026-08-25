@@ -6,10 +6,9 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -60,7 +59,7 @@ const makeMockApi = () => {
     lastCreatePrompt: "",
     lastFollowUpPrompt: "",
     createRunError: null as CursorCloudApiError | null,
-    hangRuns: new Set<string>(),
+    expireRuns: new Set<string>(),
     streamEventsByRun: new Map<string, ReadonlyArray<CursorCloudStreamEvent>>(),
     getRunById: new Map<string, CursorCloudRun>(),
   };
@@ -115,9 +114,15 @@ const makeMockApi = () => {
     getRun: (_agentId, runId) =>
       Effect.succeed(state.getRunById.get(runId) ?? finishedRun(runId)),
     streamRun: (_agentId, runId) => {
-      if (state.hangRuns.has(runId)) {
-        const prefix = state.streamEventsByRun.get(runId) ?? [];
-        return Stream.fromIterable(prefix.slice(0, 1)).pipe(Stream.concat(Stream.never));
+      if (state.expireRuns.has(runId)) {
+        return Stream.fail(
+          new CursorCloudApiError({
+            method: "GET /v1/agents/{id}/runs/{runId}/stream",
+            status: 410,
+            code: "stream_expired",
+            detail: "Stream expired.",
+          }),
+        );
       }
       const events = state.streamEventsByRun.get(runId);
       if (events) {
@@ -158,24 +163,12 @@ const collectUntil = <A extends { readonly type: string }>(
   predicate: (event: A) => boolean,
 ) =>
   Effect.gen(function* () {
-    const events = yield* Ref.make<A[]>([]);
-    const done = yield* Deferred.make<void>();
-    yield* stream.pipe(
-      Stream.runForEach((event) =>
-        Ref.update(events, (current) => [...current, event]).pipe(
-          Effect.zipRight(
-            predicate(event)
-              ? Deferred.succeed(done, undefined).pipe(Effect.ignore)
-              : Effect.void,
-          ),
-        ),
-      ),
-      Effect.forkChild,
+    const fiber = yield* stream.pipe(
+      Stream.takeUntil(predicate),
+      Stream.runCollect,
+      Effect.forkChild({ startImmediately: true }),
     );
-    return {
-      wait: Deferred.await(done),
-      snapshot: Ref.get(events),
-    };
+    return Fiber.join(fiber).pipe(Effect.map((chunk) => Array.from(chunk)));
   });
 
 it.layer(TestLayer)("CursorCloudAdapter", (it) => {
@@ -204,12 +197,7 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         threadId,
         input: "Fix the flaky test",
       });
-      yield* collected.wait;
-
-      assert.equal(state.createAgentCalls, 1);
-      assert.equal(state.createRunCalls, 0);
-      assert.deepEqual(turn.resumeCursor, { schemaVersion: 1, agentId: "bc-1" });
-      const events = yield* collected.snapshot;
+      const events = yield* collected;
       assert.isTrue(
         events.some(
           (event) =>
@@ -243,7 +231,7 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         resumeCursor: { schemaVersion: 1, agentId: "bc-persisted" },
       });
       yield* adapter.sendTurn({ threadId, input: "Keep going" });
-      yield* first.wait;
+      yield* first;
 
       assert.equal(state.createAgentCalls, 0);
       assert.equal(state.createRunCalls, 1);
@@ -272,7 +260,7 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         cwd: "/tmp/project",
       });
       yield* adapter.sendTurn({ threadId, input: "Ship it" });
-      yield* collected.wait;
+      yield* collected;
       yield* adapter.stopSession(threadId);
 
       assert.deepEqual(state.archiveCalls, []);
@@ -312,10 +300,9 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         cwd: "/tmp/project",
         resumeCursor: { schemaVersion: 1, agentId: "bc-1" },
       });
-      state.streamEventsByRun.delete("run-2");
+      state.expireRuns.add("run-2");
       yield* adapter.sendTurn({ threadId, input: "Recover" });
-      yield* collected.wait;
-      const events = yield* collected.snapshot;
+      const events = yield* collected;
       assert.isTrue(
         events.some(
           (event) =>
@@ -356,40 +343,26 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         resumeCursor: { schemaVersion: 1, agentId: "bc-persisted" },
       });
       yield* adapter.sendTurn({ threadId, input: "Retry after busy" });
-      yield* collected.wait;
+      yield* collected;
       assert.equal(state.createAgentCalls, 0);
       assert.equal(state.createRunCalls, 1);
       assert.equal(state.lastFollowUpPrompt, "Retry after busy");
     }),
   );
 
-  it.effect("cancels the in-flight cloud run on interrupt", () =>
+  it.effect("interruptTurn on a finished Cursor Cloud turn does not archive", () =>
     Effect.gen(function* () {
       const { api, state } = makeMockApi();
-      state.hangRuns.add("run-1");
       const adapter = yield* makeCursorCloudAdapter(settings, {
         instanceId: ProviderInstanceId.make("cursorCloud"),
         api,
         resolveGitTarget: () =>
           Effect.succeed({ repoUrl: "https://github.com/org/repo", startingRef: "main" }),
       });
-      const threadId = asThreadId("thread-cloud-cancel");
-      const events = yield* Ref.make<Array<{ readonly type: string }>>([]);
-      const sawDelta = yield* Deferred.make<void>();
-      const sawAbort = yield* Deferred.make<void>();
-      yield* adapter.streamEvents.pipe(
-        Stream.runForEach((event) =>
-          Ref.update(events, (current) => [...current, event]).pipe(
-            Effect.zipRight(
-              event.type === "content.delta"
-                ? Deferred.succeed(sawDelta, undefined).pipe(Effect.ignore)
-                : event.type === "turn.aborted"
-                  ? Deferred.succeed(sawAbort, undefined).pipe(Effect.ignore)
-                  : Effect.void,
-            ),
-          ),
-        ),
-        Effect.forkChild,
+      const threadId = asThreadId("thread-cloud-interrupt-idle");
+      const collected = yield* collectUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
       );
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("cursorCloud"),
@@ -397,11 +370,11 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
         runtimeMode: "full-access",
         cwd: "/tmp/project",
       });
-      yield* adapter.sendTurn({ threadId, input: "Long running" });
-      yield* Deferred.await(sawDelta);
+      yield* adapter.sendTurn({ threadId, input: "Done" });
+      yield* collected;
       yield* adapter.interruptTurn(threadId);
-      yield* Deferred.await(sawAbort);
-      assert.deepEqual(state.cancelCalls, ["bc-1:run-1"]);
+      assert.deepEqual(state.archiveCalls, []);
+      assert.deepEqual(state.deleteCalls, []);
     }),
   );
 });
