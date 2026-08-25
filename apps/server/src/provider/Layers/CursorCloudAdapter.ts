@@ -8,6 +8,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -397,7 +398,15 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             yield* finalize("failed", error.detail);
           }),
         ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : finalize("failed", Cause.pretty(cause)),
+        ),
       );
+      if (context.activeTurnId === turnId) {
+        yield* finalize("completed");
+      }
     });
 
   const startSession: CursorCloudAdapterShape["startSession"] = (input) =>
@@ -602,13 +611,14 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
       const resumeCursor = cursorCloudResumeCursor(agentId);
       context.session = { ...context.session, resumeCursor };
       // Detached so the SSE consumer outlives sendTurn; interrupted on stop/cancel.
+      // Do not startImmediately: a sync stream can deadlock the sendTurn fiber.
       context.streamFiber = yield* consumeRunStream(
         context,
         input.threadId,
         turnId,
         agentId,
         runId,
-      ).pipe(Effect.forkDetach({ startImmediately: true }));
+      ).pipe(Effect.forkDetach);
       return { threadId: input.threadId, turnId, resumeCursor };
     });
 

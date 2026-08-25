@@ -170,7 +170,7 @@ const collectUntil = <A extends { readonly type: string }>(
           ),
         ),
       ),
-      Effect.forkScoped,
+      Effect.forkScoped({ startImmediately: true }),
     );
     return {
       wait: Deferred.await(done),
@@ -389,7 +389,7 @@ it.layer(TestLayer)("CursorCloudAdapter", (it) => {
             ),
           ),
         ),
-        Effect.forkScoped,
+        Effect.forkScoped({ startImmediately: true }),
       );
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("cursorCloud"),
