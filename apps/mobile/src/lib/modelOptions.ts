@@ -35,6 +35,10 @@ function providerDisplayLabel(provider: {
   if (provider.displayName) return provider.displayName;
   if (provider.driver === "codex") return "Codex";
   if (provider.driver === "claudeAgent") return "Claude";
+  if (provider.driver === "cursor") return "Cursor";
+  if (provider.driver === "cursorCloud") return "Cursor Cloud";
+  if (provider.driver === "grok") return "Grok";
+  if (provider.driver === "opencode") return "OpenCode";
   return provider.instanceId;
 }
 

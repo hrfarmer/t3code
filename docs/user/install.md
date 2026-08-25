@@ -54,19 +54,27 @@ yay -S t3code-nightly-bin
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
 to use, then authenticate it.
 
-| Provider   | CLI                                                   | Default binary | Log in with           |
-| ---------- | ----------------------------------------------------- | -------------- | --------------------- |
-| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)  | `codex`        | `codex login`         |
-| Claude     | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
-| Cursor     | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
-| Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
-| OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
+| Provider       | CLI                                                   | Default binary | Log in with           |
+| -------------- | ----------------------------------------------------- | -------------- | --------------------- |
+| Codex          | [Codex CLI](https://developers.openai.com/codex/cli)  | `codex`        | `codex login`         |
+| Claude         | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
+| Cursor         | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
+| Cursor Cloud   | none — Cloud Agents API                               | —              | Cursor API key        |
+| Grok Build     | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
+| OpenCode       | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
 
-Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
-them on in **Settings** → the provider's card when you want to use them.
+Codex and Claude are on by default. Cursor, Cursor Cloud, Grok Build, and OpenCode are off by
+default; turn them on in **Settings** → the provider's card when you want to use them.
 
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
+
+Cursor Cloud is a separate provider. It does not use `cursor-agent`. Paste a Cursor API key from
+[cursor.com/dashboard/api](https://cursor.com/dashboard/api) in **Settings**, pick **Cursor Cloud**
+in the composer, and send a prompt. Work runs on a Cursor VM against the project's GitHub
+`origin`. The Cursor GitHub App must already have access to that repository. Review the pull
+request Cursor opens — T3 does not apply those edits to the local tree or capture local
+checkpoints for that thread.
 
 Run the login command on the machine running the T3 Code server, not on the device you browse
 from.
