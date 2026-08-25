@@ -7,21 +7,28 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with six entries:
 
-| Driver kind   | Driver source                           |
-| ------------- | --------------------------------------- |
-| `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
-| `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
-| `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
-| `grok`        | [`Drivers/GrokDriver.ts`][grok]         |
-| `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode] |
+| Driver kind    | Driver source                                 |
+| -------------- | --------------------------------------------- |
+| `codex`        | [`Drivers/CodexDriver.ts`][codex]             |
+| `claudeAgent`  | [`Drivers/ClaudeDriver.ts`][claude]           |
+| `cursor`       | [`Drivers/CursorDriver.ts`][cursor]           |
+| `cursorCloud`  | [`Drivers/CursorCloudDriver.ts`][cursorCloud] |
+| `grok`         | [`Drivers/GrokDriver.ts`][grok]               |
+| `opencode`     | [`Drivers/OpenCodeDriver.ts`][opencode]       |
 
 Each driver declares its `driverKind`, a `configSchema`, and a `create` function that builds an
 adapter in a child scope. Adapter implementations live beside them in
 `apps/server/src/provider/Layers/` (`CodexAdapter.ts`, `ClaudeAdapter.ts`, and so on) and conform to
 [`ProviderAdapter.ts`][adapter]. Read the driver plus its adapter to see how a specific agent's
 transport, config, and event shapes are mapped.
+
+`cursor` is the local Cursor CLI (`cursor-agent acp`). `cursorCloud` is a separate HTTP adapter
+for Cursor's public Cloud Agents API. Work runs on a Cursor VM against a GitHub repo and comes
+back as a branch / pull request. Idle session reaping detaches locally and must not archive the
+cloud agent; T3 thread archive / unarchive / delete map to the Cloud Agents archive / unarchive /
+delete endpoints. Local checkpoints are skipped for this driver.
 
 ## Registry and routing
 
@@ -64,7 +71,7 @@ synchronization.
 2. [`ProviderCommandReactor`][cmd] reacts to orchestration intent events and dispatches provider
    calls.
 3. [`CheckpointReactor`][checkpoint] captures workspace checkpoints on turn start and completion, and
-   performs reverts.
+   performs reverts. Cursor Cloud turns skip local capture: the cloud VM is not this working tree.
 
 ### Buffered assistant delivery
 
@@ -79,6 +86,7 @@ when a request opens (approval) or user input is requested, via
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts
+[cursorCloud]: ../../apps/server/src/provider/Drivers/CursorCloudDriver.ts
 [grok]: ../../apps/server/src/provider/Drivers/GrokDriver.ts
 [opencode]: ../../apps/server/src/provider/Drivers/OpenCodeDriver.ts
 [adapter]: ../../apps/server/src/provider/Services/ProviderAdapter.ts

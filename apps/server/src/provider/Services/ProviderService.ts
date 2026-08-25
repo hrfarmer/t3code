@@ -82,6 +82,17 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Optional remote-agent lifecycle. Idle `stopSession` must not call this.
+   * Archive, unarchive, and delete follow the T3 thread, not the local reaper.
+   */
+  readonly applyThreadLifecycle?: (
+    input: {
+      readonly threadId: ThreadId;
+      readonly action: "archive" | "unarchive" | "delete";
+    },
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.

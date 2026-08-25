@@ -1,6 +1,7 @@
 import {
   ClaudeSettings,
   CodexSettings,
+  CursorCloudSettings,
   CursorSettings,
   GrokSettings,
   OpenCodeSettings,
@@ -53,6 +54,13 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
     icon: CursorIcon,
     badgeLabel: "Early Access",
     settingsSchema: CursorSettings,
+  },
+  {
+    value: ProviderDriverKind.make("cursorCloud"),
+    label: "Cursor Cloud",
+    icon: CursorIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: CursorCloudSettings,
   },
   {
     value: ProviderDriverKind.make("grok"),

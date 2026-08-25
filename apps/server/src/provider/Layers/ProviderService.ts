@@ -984,6 +984,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const applyThreadLifecycle: NonNullable<ProviderServiceMethod<"applyThreadLifecycle">> = Effect.fn(
+    "applyThreadLifecycle",
+  )(function* (input) {
+    const binding = yield* directory.getBinding(input.threadId).pipe(
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
+    if (Option.isNone(binding)) {
+      return;
+    }
+    const instanceId = binding.value.providerInstanceId;
+    if (instanceId === undefined) {
+      return;
+    }
+    const adapter = yield* registry.getByInstance(instanceId).pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
+    if (!adapter?.applyThreadLifecycle) {
+      return;
+    }
+    yield* adapter.applyThreadLifecycle(
+      input.threadId,
+      input.action,
+      binding.value.resumeCursor ?? undefined,
+    );
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -1226,6 +1252,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    applyThreadLifecycle,
     listSessions,
     getCapabilities,
     getInstanceInfo,

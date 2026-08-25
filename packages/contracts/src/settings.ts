@@ -472,6 +472,55 @@ export const CursorSettings = makeProviderSettingsSchema(
 );
 export type CursorSettings = typeof CursorSettings.Type;
 
+export const DEFAULT_CURSOR_CLOUD_API_ENDPOINT = "https://api.cursor.com";
+
+export const CursorCloudSettings = makeProviderSettingsSchema(
+  {
+    // Off by default: cloud agents are opt-in and need an API key.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    apiKey: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API key",
+        description:
+          "Cursor user API key from cursor.com/dashboard/api. Stored outside settings.json. Leave blank to keep a stored key.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "crsr_…",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    apiEndpoint: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API endpoint",
+        description: "Override the Cloud Agents API origin. Leave blank for the public API.",
+        providerSettingsForm: {
+          placeholder: DEFAULT_CURSOR_CLOUD_API_ENDPOINT,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    autoCreatePR: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({
+        title: "Open a pull request when a run finishes",
+        description:
+          "Cursor Cloud works on a remote VM. A pull request is how the work comes back to GitHub.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+  },
+  {
+    order: ["apiKey", "apiEndpoint", "autoCreatePR"],
+  },
+);
+export type CursorCloudSettings = typeof CursorCloudSettings.Type;
+
 export const GrokSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and OpenCode): the binding is not yet
@@ -690,6 +739,7 @@ export const ServerSettings = Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    cursorCloud: CursorCloudSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -831,6 +881,13 @@ const CursorSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const CursorCloudSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  apiKey: Schema.optionalKey(TrimmedString),
+  apiEndpoint: Schema.optionalKey(TrimmedString),
+  autoCreatePR: Schema.optionalKey(Schema.Boolean),
+});
+
 const GrokSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -884,6 +941,7 @@ export const ServerSettingsPatch = Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
+      cursorCloud: Schema.optionalKey(CursorCloudSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
     }),

@@ -133,6 +133,33 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+const CURSOR_CLOUD_API_KEY_FIELD = "apiKey";
+const CURSOR_CLOUD_LEGACY_API_KEY_SECRET = "provider-config-legacy-cursorCloud-apiKey";
+
+function cursorCloudInstanceApiKeySecretName(instanceId: string): string {
+  return `provider-config-${Buffer.from(instanceId, "utf8").toString("base64url")}-apiKey`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readConfigApiKey(config: unknown): string {
+  if (!isRecord(config) || typeof config[CURSOR_CLOUD_API_KEY_FIELD] !== "string") {
+    return "";
+  }
+  return config[CURSOR_CLOUD_API_KEY_FIELD].trim();
+}
+
+function withConfigApiKey(config: unknown, apiKey: string): unknown {
+  const base = isRecord(config) ? config : {};
+  return { ...base, [CURSOR_CLOUD_API_KEY_FIELD]: apiKey };
+}
+
+function redactCursorCloudApiKey(config: unknown): unknown {
+  return withConfigApiKey(config, "");
+}
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -151,15 +178,28 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
       instanceId,
-      instance.environment
-        ? {
-            ...instance,
-            environment: instance.environment.map(redactProviderEnvironmentVariable),
-          }
-        : instance,
+      {
+        ...instance,
+        ...(instance.environment
+          ? { environment: instance.environment.map(redactProviderEnvironmentVariable) }
+          : {}),
+        ...(instance.driver === "cursorCloud"
+          ? { config: redactCursorCloudApiKey(instance.config) }
+          : {}),
+      },
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providers: {
+      ...settings.providers,
+      cursorCloud: {
+        ...settings.providers.cursorCloud,
+        apiKey: "",
+      },
+    },
+    providerInstances,
+  };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -235,6 +275,9 @@ const PersistedOptionalProviderSettings = Schema.Struct({
   providers: Schema.optionalKey(
     Schema.Struct({
       cursor: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      cursorCloud: Schema.optionalKey(
+        Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) }),
+      ),
       grok: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
       opencode: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
     }),
@@ -263,6 +306,7 @@ function restoreUsedProviders(
       instanceId,
       instance.enabled === undefined &&
       (instance.driver === "cursor" ||
+        instance.driver === "cursorCloud" ||
         instance.driver === "grok" ||
         instance.driver === "opencode") &&
       usedProviderInstances.has(instanceId)
@@ -278,6 +322,10 @@ function restoreUsedProviders(
       cursor: {
         ...settings.providers.cursor,
         enabled: persisted.providers?.cursor?.enabled ?? usedProviders.has("cursor"),
+      },
+      cursorCloud: {
+        ...settings.providers.cursorCloud,
+        enabled: persisted.providers?.cursorCloud?.enabled ?? usedProviders.has("cursorCloud"),
       },
       grok: {
         ...settings.providers.grok,
@@ -332,6 +380,7 @@ const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
   providers: {
     ...DEFAULT_SERVER_SETTINGS.providers,
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
+    cursorCloud: { ...DEFAULT_SERVER_SETTINGS.providers.cursorCloud, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
   },
@@ -443,13 +492,13 @@ const make = Effect.gen(function* () {
         provider_name AS "providerName",
         provider_instance_id AS "providerInstanceId"
       FROM projection_thread_sessions
-      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      WHERE provider_name IN ('cursor', 'cursorCloud', 'grok', 'opencode')
       UNION
       SELECT DISTINCT
         provider_name AS "providerName",
         provider_instance_id AS "providerInstanceId"
       FROM provider_session_runtime
-      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      WHERE provider_name IN ('cursor', 'cursorCloud', 'grok', 'opencode')
     `.pipe(
       Effect.mapError(
         (cause) =>
@@ -518,12 +567,61 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const materializeCursorCloudApiKeys = (
+    settings: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const readSecret = (secretName: string, instanceId?: string) =>
+        secretStore.get(secretName).pipe(
+          Effect.map((secret) =>
+            Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+          ),
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "read-secret",
+                ...(instanceId ? { providerInstanceId: instanceId } : {}),
+                environmentVariable: CURSOR_CLOUD_API_KEY_FIELD,
+                cause,
+              }),
+          ),
+        );
+
+      const legacyApiKey = yield* readSecret(CURSOR_CLOUD_LEGACY_API_KEY_SECRET);
+      const providerInstances: Record<string, ProviderInstanceConfig> = {
+        ...settings.providerInstances,
+      };
+      for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+        if (instance.driver !== "cursorCloud") continue;
+        const apiKey = yield* readSecret(cursorCloudInstanceApiKeySecretName(instanceId), instanceId);
+        providerInstances[instanceId] = {
+          ...instance,
+          config: withConfigApiKey(instance.config, apiKey),
+        };
+      }
+      return {
+        ...settings,
+        providers: {
+          ...settings.providers,
+          cursorCloud: {
+            ...settings.providers.cursorCloud,
+            apiKey: legacyApiKey,
+          },
+        },
+        providerInstances: providerInstances as ServerSettings["providerInstances"],
+      };
+    });
+
+  const materializeSecrets = (settings: ServerSettings) =>
+    materializeProviderEnvironmentSecrets(settings).pipe(Effect.flatMap(materializeCursorCloudApiKeys));
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
-        materializeProviderEnvironmentSecrets(settings).pipe(
+        materializeSecrets(settings).pipe(
           Effect.catch((error: ServerSettingsError) =>
-            Effect.logWarning("failed to materialize provider environment secrets", {
+            Effect.logWarning("failed to materialize provider secrets", {
               operation: error.operation,
               providerInstanceId: error.providerInstanceId,
               environmentVariable: error.environmentVariable,
@@ -636,6 +734,86 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const persistCursorCloudApiKeys = (
+    current: ServerSettings,
+    next: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const writeOrKeepSecret = (input: {
+        readonly secretName: string;
+        readonly nextValue: string;
+        readonly instanceId?: string;
+      }) =>
+        input.nextValue.length > 0
+          ? secretStore.set(input.secretName, textEncoder.encode(input.nextValue)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "write-secret",
+                    ...(input.instanceId ? { providerInstanceId: input.instanceId } : {}),
+                    environmentVariable: CURSOR_CLOUD_API_KEY_FIELD,
+                    cause,
+                  }),
+              ),
+            )
+          : Effect.void;
+
+      yield* writeOrKeepSecret({
+        secretName: CURSOR_CLOUD_LEGACY_API_KEY_SECRET,
+        nextValue: next.providers.cursorCloud.apiKey.trim(),
+      });
+
+      const nextSecretKeys = new Set<string>([CURSOR_CLOUD_LEGACY_API_KEY_SECRET]);
+      const providerInstances: Record<string, ProviderInstanceConfig> = {
+        ...next.providerInstances,
+      };
+      for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
+        if (instance.driver !== "cursorCloud") continue;
+        const secretName = cursorCloudInstanceApiKeySecretName(instanceId);
+        nextSecretKeys.add(secretName);
+        yield* writeOrKeepSecret({
+          secretName,
+          nextValue: readConfigApiKey(instance.config),
+          instanceId,
+        });
+        providerInstances[instanceId] = {
+          ...instance,
+          config: redactCursorCloudApiKey(instance.config),
+        };
+      }
+
+      for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
+        if (instance.driver !== "cursorCloud") continue;
+        const secretName = cursorCloudInstanceApiKeySecretName(instanceId);
+        if (nextSecretKeys.has(secretName)) continue;
+        yield* secretStore.remove(secretName).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "remove-stale-secret",
+                providerInstanceId: instanceId,
+                environmentVariable: CURSOR_CLOUD_API_KEY_FIELD,
+                cause,
+              }),
+          ),
+        );
+      }
+
+      return {
+        ...next,
+        providers: {
+          ...next.providers,
+          cursorCloud: {
+            ...next.providers.cursorCloud,
+            apiKey: "",
+          },
+        },
+        providerInstances: providerInstances as ServerSettings["providerInstances"],
+      };
+    });
+
   const writeSettingsAtomically = Effect.fnUntraced(
     function* (settings: ServerSettings) {
       const sparseSettingsJson = yield* encodeServerSettingsJson(
@@ -732,7 +910,7 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
@@ -742,12 +920,12 @@ const make = Effect.gen(function* () {
           const nextPersisted = yield* persistProviderEnvironmentSecrets(
             current,
             applyServerSettingsPatch(current, patch),
-          );
+          ).pipe(Effect.flatMap((next) => persistCursorCloudApiKeys(current, next)));
           const next = yield* normalizeServerSettings(nextPersisted);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
+          const materialized = yield* materializeSecrets(next);
           return resolveTextGenerationProvider(materialized);
         }),
       ),

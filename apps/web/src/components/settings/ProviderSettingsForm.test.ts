@@ -37,6 +37,21 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("exposes the Cursor Cloud API key as a password field", () => {
+    const cursorCloud = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursorCloud")];
+    expect(cursorCloud).toBeDefined();
+    expect(cursorCloud?.badgeLabel).toBe("Early Access");
+    expect(deriveProviderSettingsFields(cursorCloud!).map((field) => field.key)).toEqual([
+      "apiKey",
+      "apiEndpoint",
+      "autoCreatePR",
+    ]);
+    expect(deriveProviderSettingsFields(cursorCloud!).find((field) => field.key === "apiKey")).toMatchObject({
+      label: "API key",
+      control: "password",
+    });
+  });
+
   it("shows the auto-compaction threshold for Claude providers", () => {
     const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
     expect(claude).toBeDefined();
